@@ -1,20 +1,26 @@
 /**
- * Web Search Source Adapter (Brave Search API)
+ * Web Search Source Adapter (Google Custom Search)
  *
- * STATUS: Working (requires BRAVE_SEARCH_API_KEY env var)
+ * STATUS: Working (requires GOOGLE_SEARCH_API_KEY + GOOGLE_SEARCH_ENGINE_ID env vars)
  *
- * Uses Brave Search API to find leads across Craigslist, Reddit,
- * and other platforms. Brave's index includes Craigslist posts,
- * Reddit threads, and forum discussions.
+ * Uses Google Custom Search API — completely free, 100 searches/day,
+ * no credit card required. Finds leads on Craigslist, Reddit, and forums
+ * through Google's search index.
  *
- * Get a free Brave Search API key (2,000 queries/month free, no credit card):
- * 1. Go to api.search.brave.com
- * 2. Click "Get Started" → sign up free
- * 3. Create a new subscription (Free plan)
- * 4. Copy your API key
- * 5. Add as BRAVE_SEARCH_API_KEY in Vercel env vars
+ * Setup (5 minutes, free, only needs a Google account):
  *
- * Also supports BING_API_KEY as fallback if you already have one.
+ * Step 1 — Get API key:
+ *   1. Go to console.cloud.google.com
+ *   2. Create a project (or select existing)
+ *   3. Search "Custom Search API" → Enable it
+ *   4. Go to Credentials → Create Credentials → API Key
+ *   5. Copy the key → add as GOOGLE_SEARCH_API_KEY in Vercel
+ *
+ * Step 2 — Get Search Engine ID:
+ *   1. Go to programmablesearchengine.google.com
+ *   2. Click "Add" → name it anything → in Sites to Search type: craigslist.org
+ *   3. Create it → then go to Edit → Setup → turn on "Search the entire web"
+ *   4. Copy the Search engine ID (cx) → add as GOOGLE_SEARCH_ENGINE_ID in Vercel
  */
 
 import type { SourceResult, RawLead } from '@/types/source';
@@ -26,9 +32,8 @@ import { cleanUrl } from '@/lib/urlResolver';
 const SEARCH_QUERIES = [
   'site:craigslist.org "garage door" "broken" OR "stuck" OR "spring" -"call now" -"free estimate"',
   'site:craigslist.org "garage door" "need" OR "looking for" OR "help" -"licensed" -"insured"',
-  'site:reddit.com "garage door" "broken" OR "stuck" OR "help" "brooklyn" OR "queens" OR "bronx" OR "long island" OR "new jersey"',
-  'site:reddit.com "garage door spring" OR "garage opener" "not working" OR "broke" OR "snapped"',
-  '"garage door repair" "brooklyn" OR "queens" OR "bronx" OR "staten island" OR "long island" "need" OR "help" OR "broken" -site:yelp.com -site:angi.com -site:thumbtack.com',
+  'site:reddit.com "garage door" "broken" OR "stuck" "brooklyn" OR "queens" OR "bronx" OR "long island" OR "new jersey"',
+  '"garage door repair" "brooklyn" OR "queens" OR "bronx" OR "staten island" OR "long island" "need" OR "help" -site:yelp.com -site:angi.com -site:thumbtack.com',
 ];
 
 const SKIP_DOMAINS = [
@@ -42,111 +47,72 @@ function shouldSkipUrl(url: string): boolean {
     const host = u.hostname.replace(/^www\./, '');
     if (SKIP_DOMAINS.some(d => host.includes(d))) return true;
     if (u.pathname === '/' || u.pathname === '') return true;
-    if (/\/search[/?]/.test(u.pathname)) return true;
     return false;
   } catch {
     return false;
   }
 }
 
-interface BraveResult {
+interface GoogleSearchItem {
   title: string;
-  url: string;
-  description: string;
-  age?: string;
-  page_age?: string;
+  link: string;
+  snippet: string;
+  pagemap?: {
+    metatags?: Array<{ 'article:published_time'?: string; 'og:updated_time'?: string }>;
+    newsarticle?: Array<{ datepublished?: string }>;
+  };
 }
 
-async function braveSearch(query: string, apiKey: string): Promise<RawLead[]> {
-  const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=20&freshness=pw&search_lang=en&country=us`;
+async function googleSearch(query: string, apiKey: string, cx: string): Promise<RawLead[]> {
+  // dateRestrict=w1 = past week
+  const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${cx}&q=${encodeURIComponent(query)}&num=10&dateRestrict=w1`;
 
   const result = await fetchPage(url, {
     acceptJson: true,
     timeout: 10_000,
-    extraHeaders: {
-      'X-Subscription-Token': apiKey,
-      'Accept': 'application/json',
-    },
   });
 
   if (!result.ok) {
-    console.warn(`[brave] API failed (${result.status})`);
+    console.warn(`[google-search] API failed (${result.status})`);
     return [];
   }
 
   try {
-    const json = JSON.parse(result.text) as { web?: { results?: BraveResult[] } };
-    const items = json?.web?.results ?? [];
-    const leads: RawLead[] = [];
+    const json = JSON.parse(result.text) as { items?: GoogleSearchItem[]; error?: { message: string } };
 
-    for (const item of items) {
-      const cleanedUrl = cleanUrl(item.url);
-      if (shouldSkipUrl(cleanedUrl)) continue;
-      const rawDate = item.age ?? item.page_age;
-      const { date: postedAt, accuracy } = resolveDate(rawDate);
-      leads.push({
-        title: item.title,
-        url: cleanedUrl,
-        snippet: item.description,
-        postedAt,
-        postedAtAccuracy: accuracy,
-        matchedKeyword: query,
-        rawMetadata: { source: 'brave-search', age: rawDate },
-      });
+    if (json.error) {
+      console.warn(`[google-search] API error: ${json.error.message}`);
+      return [];
     }
 
-    return leads;
-  } catch (err) {
-    console.error('[brave] JSON parse error:', err);
-    return [];
-  }
-}
-
-interface BingApiResult {
-  name: string;
-  url: string;
-  snippet: string;
-  dateLastCrawled?: string;
-  datePublished?: string;
-}
-
-async function bingSearch(query: string, apiKey: string): Promise<RawLead[]> {
-  const url = `https://api.bing.microsoft.com/v7.0/search?q=${encodeURIComponent(query)}&count=20&freshness=Week&mkt=en-US`;
-
-  const result = await fetchPage(url, {
-    acceptJson: true,
-    timeout: 10_000,
-    extraHeaders: { 'Ocp-Apim-Subscription-Key': apiKey },
-  });
-
-  if (!result.ok) {
-    console.warn(`[bing] API failed (${result.status})`);
-    return [];
-  }
-
-  try {
-    const json = JSON.parse(result.text) as { webPages?: { value?: BingApiResult[] } };
-    const items = json?.webPages?.value ?? [];
     const leads: RawLead[] = [];
-
-    for (const item of items) {
-      const cleanedUrl = cleanUrl(item.url);
+    for (const item of json.items ?? []) {
+      const cleanedUrl = cleanUrl(item.link);
       if (shouldSkipUrl(cleanedUrl)) continue;
-      const { date: postedAt, accuracy } = resolveDate(item.datePublished ?? item.dateLastCrawled);
+
+      // Try to extract publish date from page metadata
+      const metatags = item.pagemap?.metatags?.[0];
+      const rawDate =
+        metatags?.['article:published_time'] ??
+        metatags?.['og:updated_time'] ??
+        item.pagemap?.newsarticle?.[0]?.datepublished;
+
+      const { date: postedAt, accuracy } = resolveDate(rawDate);
+
       leads.push({
-        title: item.name,
+        title: item.title,
         url: cleanedUrl,
         snippet: item.snippet,
         postedAt,
         postedAtAccuracy: accuracy,
         matchedKeyword: query,
-        rawMetadata: { source: 'bing-api', dateLastCrawled: item.dateLastCrawled },
+        rawMetadata: { source: 'google-search' },
       });
     }
 
     return leads;
   } catch (err) {
-    console.error('[bing] JSON parse error:', err);
+    console.error('[google-search] JSON parse error:', err);
     return [];
   }
 }
@@ -155,29 +121,23 @@ export async function fetchFallbackLeads(
   _areaKey: string,
   _timeFilter: 'today' | 'this_week'
 ): Promise<SourceResult> {
-  const braveKey = process.env.BRAVE_SEARCH_API_KEY;
-  const bingKey = process.env.BING_API_KEY;
-  const apiKey = braveKey ?? bingKey;
-  const provider = braveKey ? 'Brave Search' : bingKey ? 'Bing Search' : null;
+  const apiKey = process.env.GOOGLE_SEARCH_API_KEY;
+  const cx = process.env.GOOGLE_SEARCH_ENGINE_ID;
 
-  if (!apiKey || !provider) {
+  if (!apiKey || !cx) {
     return {
       sourceKey: 'fallback',
-      sourceName: 'Web Search',
+      sourceName: 'Google Search',
       status: 'Blocked',
       leads: [],
-      note: 'Add BRAVE_SEARCH_API_KEY to Vercel env vars to enable this source. Free at api.search.brave.com (2,000 searches/month, no credit card).',
+      note: 'Add GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_ENGINE_ID to Vercel env vars. Both are free — see setup instructions in src/sources/fallbackDiscovery.ts',
       fetchedAt: new Date(),
     };
   }
 
-  const searchFn = braveKey
-    ? (q: string) => braveSearch(q, braveKey)
-    : (q: string) => bingSearch(q, bingKey!);
-
-  // Run all queries in parallel for speed
+  // Run all queries in parallel
   const results = await Promise.all(
-    SEARCH_QUERIES.map(q => searchFn(q).catch(() => [] as RawLead[]))
+    SEARCH_QUERIES.map(q => googleSearch(q, apiKey, cx).catch(() => [] as RawLead[]))
   );
 
   const allLeads = results.flat();
@@ -191,10 +151,10 @@ export async function fetchFallbackLeads(
 
   return {
     sourceKey: 'fallback',
-    sourceName: provider,
+    sourceName: 'Google Search',
     status: dedupedLeads.length > 0 ? 'Working' : 'Partial',
     leads: dedupedLeads,
-    note: dedupedLeads.length === 0 ? `${provider} API returned no results for these queries.` : undefined,
+    note: dedupedLeads.length === 0 ? 'Google Search returned no results. Check your GOOGLE_SEARCH_ENGINE_ID is configured to search the entire web.' : undefined,
     fetchedAt: new Date(),
   };
 }
