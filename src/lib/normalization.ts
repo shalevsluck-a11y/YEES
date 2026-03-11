@@ -34,9 +34,11 @@ export function normalizeLead(raw: RawLead, ctx: NormalizationContext): Lead {
     raw.matchedKeyword ?? ''
   );
 
-  // Google Search leads are pre-filtered by targeted queries — give them a
-  // +20 boost so they aren't swallowed by the "Business Ad" bucket unfairly.
-  const score = ctx.isFallbackDiscovered ? Math.min(100, rawScore + 20) : rawScore;
+  // Search-engine leads (Google/Bing) are pre-filtered by targeted homeowner
+  // intent queries, so the raw score undersells their relevance. Boost by +30
+  // to counter false "Business Ad" classifications caused by contractor language
+  // that appears in Google snippets even on genuine homeowner posts.
+  const score = ctx.isFallbackDiscovered ? Math.min(100, rawScore + 30) : rawScore;
   const classification =
     score >= 80 ? 'Very Likely Lead' :
     score >= 55 ? 'Possible Lead' :

@@ -49,7 +49,9 @@ export async function POST(req: NextRequest) {
         sourceStatus: sourceResult.status,
         areaKey: areaFilter,
         timeFilter,
-        isFallbackDiscovered: sourceResult.sourceKey === 'fallback',
+        // Bing and Google/Serper both use targeted search queries — apply the
+        // same score boost to both so their leads aren't misclassified as ads.
+        isFallbackDiscovered: sourceResult.sourceKey === 'fallback' || sourceResult.sourceKey === 'bing',
       });
       allLeads.push(lead);
     }

@@ -16,43 +16,64 @@ import type { SourceResult, RawLead } from '@/types/source';
 import { resolveDate } from '@/lib/dateResolution';
 import { cleanUrl } from '@/lib/urlResolver';
 
+// ─── Search queries ──────────────────────────────────────────────────────────
+// Each query is purpose-built to return homeowner posts, not contractor pages.
+// We run them all in parallel (11 queries × 10 results = up to 110 raw results).
+
 const SEARCH_QUERIES = [
-  // Craigslist gigs — homeowners posting directly
-  'site:craigslist.org "garage door" "broken" OR "stuck" OR "spring"',
-  'site:craigslist.org "garage door" "need" OR "looking for" OR "help"',
+  // ── Craigslist gigs section (homeowners post here when they need work done)
+  'site:craigslist.org "garage door" ("broken" OR "stuck" OR "spring" OR "won\'t open")',
+  'site:craigslist.org "garage door" ("need" OR "looking for" OR "help wanted" OR "can anyone")',
 
-  // Reddit homeowner posts in local subs
-  'site:reddit.com "garage door" broken OR stuck "brooklyn" OR "queens" OR "bronx" OR "long island" OR "new jersey"',
-  'site:reddit.com "my garage door" (broken OR stuck OR "not working" OR "won\'t open" OR spring OR cable) -"how to fix" -"i fixed"',
+  // ── Reddit homeowner help threads (local subreddits + r/HomeImprovement)
+  'site:reddit.com "garage door" (broken OR stuck OR "not working" OR "won\'t open") (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island" OR nyc)',
+  'site:reddit.com ("my garage door" OR "our garage door") (broken OR stuck OR spring OR cable OR "off track" OR "won\'t open") -intitle:"how to fix" -intitle:"DIY"',
 
-  // Patch.com local classifieds and community posts
-  'site:patch.com "garage door" (broken OR stuck OR repair OR spring OR "need help") (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island")',
+  // ── Nextdoor public posts (neighborhood requests, often indexed by Google)
+  'site:nextdoor.com "garage door" (broken OR stuck OR "need" OR "recommend" OR "repair") (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island")',
 
-  // Nextdoor public posts indexed by Google
-  'site:nextdoor.com "garage door" (broken OR stuck OR repair OR "need") (brooklyn OR queens OR "long island" OR "new jersey")',
+  // ── Facebook public groups and community pages (Google indexes public FB posts)
+  'site:facebook.com "garage door" (broken OR "won\'t open" OR stuck OR "need someone" OR "can anyone recommend") (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island")',
+  'site:facebook.com ("need a garage door" OR "garage door broken" OR "garage door stuck" OR "recommend a garage door") (nyc OR "new york" OR "new jersey" OR brooklyn OR queens)',
 
-  // Bark.com customer service requests
-  'site:bark.com "garage door" (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "new york")',
+  // ── Patch.com local classifieds / community posts
+  'site:patch.com "garage door" (broken OR stuck OR "need help" OR spring OR "won\'t open") (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island")',
 
-  // Facebook public community groups (Google indexes some)
-  'site:facebook.com "garage door" (broken OR "need repair" OR "recommend") (brooklyn OR queens OR "new york" OR "new jersey")',
+  // ── Bark.com / TaskRabbit / Thumbtack customer request pages
+  'site:bark.com "garage door" (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island" OR "new york")',
 
-  // Broad homeowner-intent search — catches anything not on directories
-  '"my garage door" (broken OR "won\'t open" OR stuck OR "off track" OR "spring broke" OR "cable broke") (brooklyn OR queens OR bronx OR nyc OR "long island" OR "new jersey") -site:yelp.com -site:angi.com -site:thumbtack.com -site:homeadvisor.com',
+  // ── Open web: strong homeowner-intent phrasing (personal language, not ads)
+  '("my garage door" OR "our garage door") (broken OR "won\'t open" OR "won\'t close" OR stuck OR "spring broke" OR "cable broke" OR "off track") (brooklyn OR queens OR bronx OR nyc OR "long island" OR "new jersey" OR "staten island") -site:yelp.com -site:angi.com -site:thumbtack.com -site:homeadvisor.com -site:houzz.com',
 
-  // Local community boards / neighborhood forums
-  '"looking for" "garage door" (repair OR fix OR service) (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island") -site:yelp.com -site:angi.com',
-
-  // General fresh posts with strong homeowner intent signals
-  '"garage door" ("broken spring" OR "broken cable" OR "off track" OR "won\'t close" OR "won\'t open" OR "stuck open" OR "stuck closed") (nyc OR brooklyn OR queens OR bronx OR "long island" OR "new jersey")',
+  // ── Neighbor recommendation requests (high-value: person actively choosing a contractor)
+  '("recommend" OR "looking for" OR "can anyone suggest" OR "who do you use") "garage door" (repair OR fix OR service OR company) (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island") -site:yelp.com -site:angi.com',
 ];
+
+// ─── Domain skip list ────────────────────────────────────────────────────────
+// Contractor directories and business listing sites — never homeowner posts
 
 const SKIP_DOMAINS = [
   'yelp.com', 'angi.com', 'thumbtack.com', 'homeadvisor.com',
   'houzz.com', 'bbb.org', 'yellowpages.com', 'angieslist.com',
   'amazon.com', 'homedepot.com', 'lowes.com', 'wikipedia.org',
   'fixr.com', 'costimates.com', 'improvenet.com', 'porch.com',
+  'networx.com', 'manta.com', 'superpages.com', 'citysearch.com',
+  'bobvila.com', 'thisoldhouse.com', 'familyhandyman.com',
+  'houselogic.com', 'doityourself.com', 'hunker.com', 'hunterdon.com',
 ];
+
+// ─── Relevance guard ─────────────────────────────────────────────────────────
+// Google sometimes returns pages where "garage door" appears only in an ad/sidebar.
+// Require the title OR snippet to contain a garage-related term.
+
+const RELEVANCE_TERMS = [
+  'garage', 'overhead door', 'opener', 'spring', 'door repair',
+];
+
+function isGarageRelevant(title: string, snippet: string): boolean {
+  const text = `${title} ${snippet}`.toLowerCase();
+  return RELEVANCE_TERMS.some(t => text.includes(t));
+}
 
 function shouldSkipUrl(url: string): boolean {
   try {
@@ -97,6 +118,9 @@ async function serperSearch(query: string, apiKey: string): Promise<RawLead[]> {
     for (const item of json.organic ?? []) {
       const cleanedUrl = cleanUrl(item.link);
       if (shouldSkipUrl(cleanedUrl)) continue;
+
+      // ── Relevance guard: skip if title+snippet have nothing garage-related ──
+      if (!isGarageRelevant(item.title, item.snippet)) continue;
 
       const { date: postedAt, accuracy } = resolveDate(item.date);
 
