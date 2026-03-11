@@ -47,7 +47,8 @@ function buildRssUrl(domain: string, category: string, query: string): string {
 }
 
 function wrapWithScraper(targetUrl: string, apiKey: string): string {
-  return `http://api.scraperapi.com?api_key=${apiKey}&url=${encodeURIComponent(targetUrl)}&render=false`;
+  // residential=true: uses residential IPs which bypass Craigslist's datacenter block
+  return `http://api.scraperapi.com?api_key=${apiKey}&url=${encodeURIComponent(targetUrl)}&render=false&residential=true&country_code=us`;
 }
 
 function parseRss(xml: string, query: string): RawLead[] {

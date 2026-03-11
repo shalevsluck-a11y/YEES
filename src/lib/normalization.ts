@@ -24,7 +24,7 @@ export function normalizeLead(raw: RawLead, ctx: NormalizationContext): Lead {
   const postedAt = raw.postedAt ?? null;
   const postedAtAccuracy: DateAccuracy = raw.postedAtAccuracy ?? 'Unknown';
 
-  const { score, classification, confidenceReason } = scoreLead(
+  const { score: rawScore, classification: rawClass, confidenceReason } = scoreLead(
     raw.title,
     raw.snippet,
     areaMatched,
@@ -33,6 +33,14 @@ export function normalizeLead(raw: RawLead, ctx: NormalizationContext): Lead {
     ctx.timeFilter,
     raw.matchedKeyword ?? ''
   );
+
+  // Google Search leads are pre-filtered by targeted queries — give them a
+  // +20 boost so they aren't swallowed by the "Business Ad" bucket unfairly.
+  const score = ctx.isFallbackDiscovered ? Math.min(100, rawScore + 20) : rawScore;
+  const classification =
+    score >= 80 ? 'Very Likely Lead' :
+    score >= 55 ? 'Possible Lead' :
+    rawClass;
 
   return {
     id: uuidv4(),
