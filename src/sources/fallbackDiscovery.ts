@@ -1,24 +1,20 @@
 /**
- * Bing Search Source Adapter
+ * Web Search Source Adapter (Brave Search API)
  *
- * STATUS: Working (requires BING_API_KEY env var)
+ * STATUS: Working (requires BRAVE_SEARCH_API_KEY env var)
  *
- * Uses Bing Web Search API to find leads across Craigslist, Reddit,
- * and other platforms via Bing's search index.
- *
- * This is our primary reliable source when Craigslist direct access is
- * unavailable (no SCRAPER_API_KEY). Bing's index includes Craigslist posts,
+ * Uses Brave Search API to find leads across Craigslist, Reddit,
+ * and other platforms. Brave's index includes Craigslist posts,
  * Reddit threads, and forum discussions.
  *
- * Get a free Bing API key (1,000 searches/month free):
- * 1. Go to portal.azure.com → sign in or create a free account
- * 2. Search for "Bing Search v7" → Create
- * 3. Choose Free tier (F1) — 1,000 transactions/month
- * 4. Copy the key from Keys and Endpoint
- * 5. Add as BING_API_KEY in Vercel env vars
+ * Get a free Brave Search API key (2,000 queries/month free, no credit card):
+ * 1. Go to api.search.brave.com
+ * 2. Click "Get Started" → sign up free
+ * 3. Create a new subscription (Free plan)
+ * 4. Copy your API key
+ * 5. Add as BRAVE_SEARCH_API_KEY in Vercel env vars
  *
- * Without BING_API_KEY: this source is disabled (Bing blocks HTML scraping
- * from datacenter IPs just like Craigslist does).
+ * Also supports BING_API_KEY as fallback if you already have one.
  */
 
 import type { SourceResult, RawLead } from '@/types/source';
@@ -27,7 +23,7 @@ import { resolveDate } from '@/lib/dateResolution';
 import { cleanUrl } from '@/lib/urlResolver';
 
 // Queries targeting actual homeowner posts, not contractor business pages
-const BING_QUERIES = [
+const SEARCH_QUERIES = [
   'site:craigslist.org "garage door" "broken" OR "stuck" OR "spring" -"call now" -"free estimate"',
   'site:craigslist.org "garage door" "need" OR "looking for" OR "help" -"licensed" -"insured"',
   'site:reddit.com "garage door" "broken" OR "stuck" OR "help" "brooklyn" OR "queens" OR "bronx" OR "long island" OR "new jersey"',
@@ -39,14 +35,6 @@ const SKIP_DOMAINS = [
   'yelp.com', 'angi.com', 'thumbtack.com', 'homeadvisor.com',
   'houzz.com', 'bbb.org', 'yellowpages.com', 'angieslist.com',
 ];
-
-interface BingApiResult {
-  name: string;
-  url: string;
-  snippet: string;
-  dateLastCrawled?: string;
-  datePublished?: string;
-}
 
 function shouldSkipUrl(url: string): boolean {
   try {
@@ -61,7 +49,68 @@ function shouldSkipUrl(url: string): boolean {
   }
 }
 
-async function bingApiSearch(query: string, apiKey: string): Promise<RawLead[]> {
+interface BraveResult {
+  title: string;
+  url: string;
+  description: string;
+  age?: string;
+  page_age?: string;
+}
+
+async function braveSearch(query: string, apiKey: string): Promise<RawLead[]> {
+  const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=20&freshness=pw&search_lang=en&country=us`;
+
+  const result = await fetchPage(url, {
+    acceptJson: true,
+    timeout: 10_000,
+    extraHeaders: {
+      'X-Subscription-Token': apiKey,
+      'Accept': 'application/json',
+    },
+  });
+
+  if (!result.ok) {
+    console.warn(`[brave] API failed (${result.status})`);
+    return [];
+  }
+
+  try {
+    const json = JSON.parse(result.text) as { web?: { results?: BraveResult[] } };
+    const items = json?.web?.results ?? [];
+    const leads: RawLead[] = [];
+
+    for (const item of items) {
+      const cleanedUrl = cleanUrl(item.url);
+      if (shouldSkipUrl(cleanedUrl)) continue;
+      const rawDate = item.age ?? item.page_age;
+      const { date: postedAt, accuracy } = resolveDate(rawDate);
+      leads.push({
+        title: item.title,
+        url: cleanedUrl,
+        snippet: item.description,
+        postedAt,
+        postedAtAccuracy: accuracy,
+        matchedKeyword: query,
+        rawMetadata: { source: 'brave-search', age: rawDate },
+      });
+    }
+
+    return leads;
+  } catch (err) {
+    console.error('[brave] JSON parse error:', err);
+    return [];
+  }
+}
+
+interface BingApiResult {
+  name: string;
+  url: string;
+  snippet: string;
+  dateLastCrawled?: string;
+  datePublished?: string;
+}
+
+async function bingSearch(query: string, apiKey: string): Promise<RawLead[]> {
   const url = `https://api.bing.microsoft.com/v7.0/search?q=${encodeURIComponent(query)}&count=20&freshness=Week&mkt=en-US`;
 
   const result = await fetchPage(url, {
@@ -83,9 +132,7 @@ async function bingApiSearch(query: string, apiKey: string): Promise<RawLead[]> 
     for (const item of items) {
       const cleanedUrl = cleanUrl(item.url);
       if (shouldSkipUrl(cleanedUrl)) continue;
-
       const { date: postedAt, accuracy } = resolveDate(item.datePublished ?? item.dateLastCrawled);
-
       leads.push({
         title: item.name,
         url: cleanedUrl,
@@ -108,27 +155,33 @@ export async function fetchFallbackLeads(
   _areaKey: string,
   _timeFilter: 'today' | 'this_week'
 ): Promise<SourceResult> {
-  const apiKey = process.env.BING_API_KEY;
+  const braveKey = process.env.BRAVE_SEARCH_API_KEY;
+  const bingKey = process.env.BING_API_KEY;
+  const apiKey = braveKey ?? bingKey;
+  const provider = braveKey ? 'Brave Search' : bingKey ? 'Bing Search' : null;
 
-  if (!apiKey) {
+  if (!apiKey || !provider) {
     return {
       sourceKey: 'fallback',
-      sourceName: 'Bing Search',
+      sourceName: 'Web Search',
       status: 'Blocked',
       leads: [],
-      note: 'Add BING_API_KEY to Vercel env vars to enable this source. Free tier: 1,000 searches/month. Get it at portal.azure.com → search "Bing Search v7" → Free tier.',
+      note: 'Add BRAVE_SEARCH_API_KEY to Vercel env vars to enable this source. Free at api.search.brave.com (2,000 searches/month, no credit card).',
       fetchedAt: new Date(),
     };
   }
 
+  const searchFn = braveKey
+    ? (q: string) => braveSearch(q, braveKey)
+    : (q: string) => bingSearch(q, bingKey!);
+
   // Run all queries in parallel for speed
   const results = await Promise.all(
-    BING_QUERIES.map(q => bingApiSearch(q, apiKey).catch(() => [] as RawLead[]))
+    SEARCH_QUERIES.map(q => searchFn(q).catch(() => [] as RawLead[]))
   );
 
   const allLeads = results.flat();
 
-  // Deduplicate by URL
   const seen = new Set<string>();
   const dedupedLeads = allLeads.filter(l => {
     if (seen.has(l.url)) return false;
@@ -138,10 +191,10 @@ export async function fetchFallbackLeads(
 
   return {
     sourceKey: 'fallback',
-    sourceName: 'Bing Search',
+    sourceName: provider,
     status: dedupedLeads.length > 0 ? 'Working' : 'Partial',
     leads: dedupedLeads,
-    note: dedupedLeads.length === 0 ? 'Bing API returned no results for these queries.' : undefined,
+    note: dedupedLeads.length === 0 ? `${provider} API returned no results for these queries.` : undefined,
     fetchedAt: new Date(),
   };
 }
