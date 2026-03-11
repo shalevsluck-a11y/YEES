@@ -16,41 +16,56 @@ import type { SourceResult, RawLead } from '@/types/source';
 import { resolveDate } from '@/lib/dateResolution';
 import { cleanUrl } from '@/lib/urlResolver';
 
-// ─── Search queries ──────────────────────────────────────────────────────────
-// Each query is purpose-built to return homeowner posts, not contractor pages.
-// We run them all in parallel (11 queries × 10 results = up to 110 raw results).
+// ─── Search queries ───────────────────────────────────────────────────────────
+//
+// STRATEGY: Every query is built so that Google only returns pages where
+// "garage door" is central to the page — not in a sidebar ad. We achieve
+// this by combining garage terms with strong homeowner-intent signals and
+// restricting to platforms where homeowners actually post.
+//
+// 11 queries × 10 results = up to 110 raw candidates (deduped before scoring).
 
 const SEARCH_QUERIES = [
-  // ── Craigslist gigs section (homeowners post here when they need work done)
-  'site:craigslist.org "garage door" ("broken" OR "stuck" OR "spring" OR "won\'t open")',
-  'site:craigslist.org "garage door" ("need" OR "looking for" OR "help wanted" OR "can anyone")',
+  // ── Craigslist labor-gigs section (/lbg) — homeowners requesting work ──────
+  // The /lbg path is the "Labor Gigs" board where HOMEOWNERS post tasks they
+  // need done. /svc is contractors advertising. We target /lbg exclusively
+  // and exclude hiring/employment language to prevent job ads from sneaking in.
+  'site:craigslist.org/lbg "garage door" (broken OR stuck OR spring OR "won\'t open" OR "need help")',
+  'site:craigslist.org "garage door" ("need" OR "looking for" OR "can anyone") -"will train" -"general labor" -"we are hiring" -"apply now" -"full time" -"part time"',
 
-  // ── Reddit homeowner help threads (local subreddits + r/HomeImprovement)
-  'site:reddit.com "garage door" (broken OR stuck OR "not working" OR "won\'t open") (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island" OR nyc)',
-  'site:reddit.com ("my garage door" OR "our garage door") (broken OR stuck OR spring OR cable OR "off track" OR "won\'t open") -intitle:"how to fix" -intitle:"DIY"',
+  // ── Reddit homeowner help threads ─────────────────────────────────────────
+  // Restrict to posts where garage door IS the topic (not incidentally mentioned).
+  // Titles on Reddit threads always start with the problem, so a title-containing
+  // garage term is a strong signal the post is about garage door service.
+  'site:reddit.com "garage door" (broken OR stuck OR "not working" OR "won\'t open" OR spring OR cable) (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island" OR nyc) -intitle:"how to fix" -intitle:"DIY guide"',
+  'site:reddit.com intitle:"garage door" (broken OR stuck OR spring OR repair OR help OR recommend)',
 
-  // ── Nextdoor public posts (neighborhood requests, often indexed by Google)
-  'site:nextdoor.com "garage door" (broken OR stuck OR "need" OR "recommend" OR "repair") (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island")',
+  // ── Facebook public groups / community pages ──────────────────────────────
+  // Google indexes many public Facebook Group posts. Neighborhood pages
+  // frequently have homeowners asking for contractor recommendations.
+  'site:facebook.com intitle:"garage door" (broken OR stuck OR "need" OR "recommend" OR "won\'t open") (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island")',
+  'site:facebook.com "garage door" ("can anyone recommend" OR "looking for" OR "need someone to fix" OR "need a good" OR "spring broke" OR "cable broke") (nyc OR brooklyn OR queens OR "long island" OR "new jersey")',
 
-  // ── Facebook public groups and community pages (Google indexes public FB posts)
-  'site:facebook.com "garage door" (broken OR "won\'t open" OR stuck OR "need someone" OR "can anyone recommend") (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island")',
-  'site:facebook.com ("need a garage door" OR "garage door broken" OR "garage door stuck" OR "recommend a garage door") (nyc OR "new york" OR "new jersey" OR brooklyn OR queens)',
+  // ── Nextdoor (public posts indexed by Google) ─────────────────────────────
+  'site:nextdoor.com "garage door" (broken OR stuck OR "need" OR "recommend" OR repair) (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island")',
 
-  // ── Patch.com local classifieds / community posts
-  'site:patch.com "garage door" (broken OR stuck OR "need help" OR spring OR "won\'t open") (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island")',
+  // ── Patch.com community / classifieds ────────────────────────────────────
+  // Restrict to posts where the title mentions garage door to avoid news articles
+  // where "garage door" only appears in a sidebar ad.
+  'site:patch.com intitle:"garage door" (broken OR stuck OR repair OR spring OR "won\'t open" OR need)',
 
-  // ── Bark.com / TaskRabbit / Thumbtack customer request pages
-  'site:bark.com "garage door" (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island" OR "new york")',
-
-  // ── Open web: strong homeowner-intent phrasing (personal language, not ads)
+  // ── Open web: personal first-person language (never appears on contractor sites)
   '("my garage door" OR "our garage door") (broken OR "won\'t open" OR "won\'t close" OR stuck OR "spring broke" OR "cable broke" OR "off track") (brooklyn OR queens OR bronx OR nyc OR "long island" OR "new jersey" OR "staten island") -site:yelp.com -site:angi.com -site:thumbtack.com -site:homeadvisor.com -site:houzz.com',
 
-  // ── Neighbor recommendation requests (high-value: person actively choosing a contractor)
-  '("recommend" OR "looking for" OR "can anyone suggest" OR "who do you use") "garage door" (repair OR fix OR service OR company) (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island") -site:yelp.com -site:angi.com',
+  // ── Neighbor recommendation requests (highest intent — actively choosing) ──
+  '("recommend" OR "can anyone suggest" OR "who do you use" OR "looking for a good") "garage door" (repair OR company OR service OR tech) (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island") -site:yelp.com -site:angi.com -site:thumbtack.com',
+
+  // ── Twitter/X public posts (Google indexes public tweets) ─────────────────
+  '(site:twitter.com OR site:x.com) "garage door" (broken OR stuck OR "spring broke" OR "won\'t open" OR "need help") (brooklyn OR queens OR bronx OR nyc OR "long island" OR "new jersey")',
 ];
 
-// ─── Domain skip list ────────────────────────────────────────────────────────
-// Contractor directories and business listing sites — never homeowner posts
+// ─── Domain skip list ─────────────────────────────────────────────────────────
+// Business directories and contractor listing sites — never homeowner posts.
 
 const SKIP_DOMAINS = [
   'yelp.com', 'angi.com', 'thumbtack.com', 'homeadvisor.com',
@@ -59,20 +74,41 @@ const SKIP_DOMAINS = [
   'fixr.com', 'costimates.com', 'improvenet.com', 'porch.com',
   'networx.com', 'manta.com', 'superpages.com', 'citysearch.com',
   'bobvila.com', 'thisoldhouse.com', 'familyhandyman.com',
-  'houselogic.com', 'doityourself.com', 'hunker.com', 'hunterdon.com',
+  'houselogic.com', 'doityourself.com', 'hunker.com',
+  'indeed.com', 'ziprecruiter.com', 'monster.com', 'glassdoor.com',
 ];
 
-// ─── Relevance guard ─────────────────────────────────────────────────────────
-// Google sometimes returns pages where "garage door" appears only in an ad/sidebar.
-// Require the title OR snippet to contain a garage-related term.
+// ─── Title relevance guard ────────────────────────────────────────────────────
+// Google sometimes returns pages where "garage door" appears only in a sidebar
+// ad while the page itself is completely unrelated (e.g., a news article about
+// a celebrity). The TITLE of a genuine homeowner post always mentions the
+// problem, so we require the title to contain a garage-related term.
+// If the title doesn't say "garage", it's almost certainly not a homeowner post.
 
-const RELEVANCE_TERMS = [
-  'garage', 'overhead door', 'opener', 'spring', 'door repair',
+const TITLE_GARAGE_TERMS = [
+  'garage', 'overhead door', 'opener', 'torsion spring', 'door spring',
 ];
 
-function isGarageRelevant(title: string, snippet: string): boolean {
+function titleHasGarageContext(title: string): boolean {
+  const lower = title.toLowerCase();
+  return TITLE_GARAGE_TERMS.some(t => lower.includes(t));
+}
+
+// ─── Job posting filter ───────────────────────────────────────────────────────
+// Craigslist labor gigs include both homeowner task posts AND employer job ads.
+// These signals reliably identify employer job postings, not homeowner requests.
+
+const JOB_POST_SIGNALS = [
+  'will train', 'we are hiring', 'help wanted', 'job listing', 'apply now',
+  'monday through friday', 'hiring now', 'full-time', 'part-time',
+  'full time employee', 'part time employee', 'benefits include',
+  'submit your resume', 'send resume', 'per hour', 'hourly rate',
+  'weekends required', 'driver license required', 'background check required',
+];
+
+function isJobPosting(title: string, snippet: string): boolean {
   const text = `${title} ${snippet}`.toLowerCase();
-  return RELEVANCE_TERMS.some(t => text.includes(t));
+  return JOB_POST_SIGNALS.some(s => text.includes(s));
 }
 
 function shouldSkipUrl(url: string): boolean {
@@ -119,8 +155,12 @@ async function serperSearch(query: string, apiKey: string): Promise<RawLead[]> {
       const cleanedUrl = cleanUrl(item.link);
       if (shouldSkipUrl(cleanedUrl)) continue;
 
-      // ── Relevance guard: skip if title+snippet have nothing garage-related ──
-      if (!isGarageRelevant(item.title, item.snippet)) continue;
+      // ── Title must mention garage — filters out unrelated pages where
+      //    "garage door" only appears in sidebar ads (e.g., news articles) ──
+      if (!titleHasGarageContext(item.title)) continue;
+
+      // ── Skip employer job ads masquerading as gig posts ──
+      if (isJobPosting(item.title, item.snippet)) continue;
 
       const { date: postedAt, accuracy } = resolveDate(item.date);
 
