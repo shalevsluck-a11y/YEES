@@ -1,17 +1,15 @@
 /**
  * Craigslist Source Adapter
  *
- * STATUS: Working (requires SCRAPER_API_KEY env var on cloud hosting)
+ * PRIMARY: ScraperAPI (SCRAPER_API_KEY) — direct RSS feed via residential proxy
+ * FALLBACK: Serper/Google Search (SERPER_API_KEY) — searches Craigslist via Google index
  *
- * Craigslist blocks datacenter IPs (AWS/Vercel). To work on Vercel,
- * this adapter routes requests through ScraperAPI (free: 5000 req/month).
- * Get a free key at: https://www.scraperapi.com
+ * Craigslist blocks Vercel datacenter IPs.
+ * - With SCRAPER_API_KEY: fetches Craigslist RSS directly (most accurate/fresh)
+ * - Without SCRAPER_API_KEY: falls back to Google site:craigslist.org queries
+ *   which find the same homeowner posts via Google's crawl index.
  *
- * Without SCRAPER_API_KEY: marks itself as Blocked.
- * With SCRAPER_API_KEY: fetches Craigslist RSS through residential proxy.
- *
- * Searches gig sections:
- *   lbg = labor gigs (homeowners posting "need someone to fix my garage door")
+ * ScraperAPI free tier: 5,000 req/month at scraperapi.com
  */
 
 import * as cheerio from 'cheerio';
@@ -19,6 +17,7 @@ import type { SourceResult, RawLead } from '@/types/source';
 import { fetchPage } from '@/lib/fetcher';
 import { resolveDate } from '@/lib/dateResolution';
 import { getCraigslistDomains } from '@/config/areas';
+import { runSerperQueries } from '@/lib/serperSearch';
 
 const CL_DOMAINS: Record<string, string> = {
   newyork: 'newyork',
@@ -26,7 +25,6 @@ const CL_DOMAINS: Record<string, string> = {
   newjersey: 'newjersey',
 };
 
-// Keep queries short — each uses 1 ScraperAPI credit
 const FOCUSED_QUERIES = [
   'garage door repair',
   'broken spring garage',
@@ -42,12 +40,18 @@ const CRAIGSLIST_AREA_CODES: Record<string, string> = {
   nno: 'North NJ', sno: 'South NJ', cnt: 'Central NJ',
 };
 
+// Serper queries used when ScraperAPI key is unavailable
+const SERPER_CL_QUERIES = [
+  'site:craigslist.org "garage door" (broken OR stuck OR spring OR "won\'t open" OR "need help" OR "looking for") (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island") -"will train" -"general labor" -"hiring"',
+  'site:craigslist.org "garage" (opener OR spring OR cable OR panel OR sensor) ("need" OR "broken" OR "repair" OR "install") (brooklyn OR queens OR bronx OR "long island" OR "new jersey")',
+  'site:craigslist.org/lbg "garage door"',
+];
+
 function buildRssUrl(domain: string, category: string, query: string): string {
   return `https://${domain}.craigslist.org/search/${category}?query=${encodeURIComponent(query)}&format=rss`;
 }
 
 function wrapWithScraper(targetUrl: string, apiKey: string): string {
-  // residential=true: uses residential IPs which bypass Craigslist's datacenter block
   return `http://api.scraperapi.com?api_key=${apiKey}&url=${encodeURIComponent(targetUrl)}&render=false&residential=true&country_code=us`;
 }
 
@@ -82,67 +86,77 @@ export async function fetchCraigslistLeads(
   _timeFilter: 'today' | 'this_week'
 ): Promise<SourceResult> {
   const scraperApiKey = process.env.SCRAPER_API_KEY;
+  const serperApiKey = process.env.SERPER_API_KEY;
 
-  if (!scraperApiKey) {
+  // ── Primary: ScraperAPI direct RSS ───────────────────────────────────────
+  if (scraperApiKey) {
+    const allLeads: RawLead[] = [];
+    const domains = getCraigslistDomains(areaKey).map(d => CL_DOMAINS[d] ?? d);
+    const queries = FOCUSED_QUERIES.slice(0, 2);
+    let fetchSuccesses = 0;
+    let fetchErrors = 0;
+
+    const tasks: Promise<void>[] = [];
+    for (const domain of domains.slice(0, 2)) {
+      for (const query of queries) {
+        const rssUrl = buildRssUrl(domain, 'lbg', query);
+        const fetchUrl = wrapWithScraper(rssUrl, scraperApiKey);
+        tasks.push(
+          fetchPage(fetchUrl, { acceptXml: true, timeout: 7_000 })
+            .then(result => {
+              if (!result.ok) { fetchErrors++; }
+              else { allLeads.push(...parseRss(result.text, query)); fetchSuccesses++; }
+            })
+            .catch(() => { fetchErrors++; })
+        );
+      }
+    }
+    await Promise.all(tasks);
+
+    const seen = new Set<string>();
+    const dedupedLeads = allLeads.filter(l => {
+      if (seen.has(l.url)) return false;
+      seen.add(l.url);
+      return true;
+    });
+
+    const status = fetchSuccesses === 0 ? 'Blocked' : fetchErrors > fetchSuccesses ? 'Partial' : 'Working';
     return {
       sourceKey: 'craigslist',
       sourceName: 'Craigslist',
-      status: 'Blocked',
-      leads: [],
-      note: 'Craigslist blocks Vercel datacenter IPs. Add SCRAPER_API_KEY to Vercel env vars to fix. Free at scraperapi.com (5,000 req/month free tier).',
+      status,
+      leads: dedupedLeads,
+      note: status === 'Blocked'
+        ? 'ScraperAPI requests failed. Verify your SCRAPER_API_KEY in Vercel env vars.'
+        : status === 'Partial'
+          ? `${fetchErrors} of ${fetchErrors + fetchSuccesses} requests failed.`
+          : undefined,
       fetchedAt: new Date(),
     };
   }
 
-  const allLeads: RawLead[] = [];
-  const domains = getCraigslistDomains(areaKey).map(d => CL_DOMAINS[d] ?? d);
-  // 2 domains × 2 queries = 4 ScraperAPI credits per search
-  const queries = FOCUSED_QUERIES.slice(0, 2);
-
-  let fetchSuccesses = 0;
-  let fetchErrors = 0;
-
-  // Run all in parallel — critical for staying within Vercel's timeout
-  const tasks: Promise<void>[] = [];
-  for (const domain of domains.slice(0, 2)) {
-    for (const query of queries) {
-      const rssUrl = buildRssUrl(domain, 'lbg', query);
-      const fetchUrl = wrapWithScraper(rssUrl, scraperApiKey);
-      tasks.push(
-        fetchPage(fetchUrl, { acceptXml: true, timeout: 7_000 })
-          .then(result => {
-            if (!result.ok) {
-              fetchErrors++;
-            } else {
-              allLeads.push(...parseRss(result.text, query));
-              fetchSuccesses++;
-            }
-          })
-          .catch(() => { fetchErrors++; })
-      );
-    }
+  // ── Fallback: Google Search (site:craigslist.org via Serper) ─────────────
+  if (serperApiKey) {
+    const leads = await runSerperQueries(SERPER_CL_QUERIES, serperApiKey);
+    return {
+      sourceKey: 'craigslist',
+      sourceName: 'Craigslist',
+      status: leads.length > 0 ? 'Working' : 'Partial',
+      leads,
+      note: leads.length === 0
+        ? 'No Craigslist results via Google this week. Posts may not be indexed yet.'
+        : 'Results via Google index (add SCRAPER_API_KEY for direct real-time access).',
+      fetchedAt: new Date(),
+    };
   }
-  await Promise.all(tasks);
 
-  const seen = new Set<string>();
-  const dedupedLeads = allLeads.filter(l => {
-    if (seen.has(l.url)) return false;
-    seen.add(l.url);
-    return true;
-  });
-
-  const status = fetchSuccesses === 0 ? 'Blocked' : fetchErrors > fetchSuccesses ? 'Partial' : 'Working';
-
+  // ── No keys available ─────────────────────────────────────────────────────
   return {
     sourceKey: 'craigslist',
     sourceName: 'Craigslist',
-    status,
-    leads: dedupedLeads,
-    note: status === 'Blocked'
-      ? 'ScraperAPI requests failed. Verify your SCRAPER_API_KEY in Vercel env vars.'
-      : status === 'Partial'
-        ? `${fetchErrors} of ${fetchErrors + fetchSuccesses} requests failed.`
-        : undefined,
+    status: 'Blocked',
+    leads: [],
+    note: 'Add SCRAPER_API_KEY (scraperapi.com, free 5k/mo) for direct access, or SERPER_API_KEY for Google-index fallback.',
     fetchedAt: new Date(),
   };
 }
