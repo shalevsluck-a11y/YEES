@@ -1,39 +1,26 @@
 /**
- * Web Search Source Adapter (Google Custom Search)
+ * Web Search Source Adapter (Serper.dev — Google Search API)
  *
- * STATUS: Working (requires GOOGLE_SEARCH_API_KEY + GOOGLE_SEARCH_ENGINE_ID env vars)
+ * STATUS: Working (requires SERPER_API_KEY env var)
  *
- * Uses Google Custom Search API — completely free, 100 searches/day,
- * no credit card required. Finds leads on Craigslist, Reddit, and forums
- * through Google's search index.
+ * Uses Serper.dev — returns Google search results via clean API.
+ * Free tier: 2,500 searches, no credit card required.
  *
- * Setup (5 minutes, free, only needs a Google account):
- *
- * Step 1 — Get API key:
- *   1. Go to console.cloud.google.com
- *   2. Create a project (or select existing)
- *   3. Search "Custom Search API" → Enable it
- *   4. Go to Credentials → Create Credentials → API Key
- *   5. Copy the key → add as GOOGLE_SEARCH_API_KEY in Vercel
- *
- * Step 2 — Get Search Engine ID:
- *   1. Go to programmablesearchengine.google.com
- *   2. Click "Add" → name it anything → in Sites to Search type: craigslist.org
- *   3. Create it → then go to Edit → Setup → turn on "Search the entire web"
- *   4. Copy the Search engine ID (cx) → add as GOOGLE_SEARCH_ENGINE_ID in Vercel
+ * Setup (2 minutes):
+ *   1. Go to serper.dev → sign up with email
+ *   2. Copy your API key from the dashboard
+ *   3. Add SERPER_API_KEY to Vercel env vars → Redeploy
  */
 
 import type { SourceResult, RawLead } from '@/types/source';
-import { fetchPage } from '@/lib/fetcher';
 import { resolveDate } from '@/lib/dateResolution';
 import { cleanUrl } from '@/lib/urlResolver';
 
-// Queries targeting actual homeowner posts, not contractor business pages
 const SEARCH_QUERIES = [
-  'site:craigslist.org "garage door" "broken" OR "stuck" OR "spring" -"call now" -"free estimate"',
-  'site:craigslist.org "garage door" "need" OR "looking for" OR "help" -"licensed" -"insured"',
-  'site:reddit.com "garage door" "broken" OR "stuck" "brooklyn" OR "queens" OR "bronx" OR "long island" OR "new jersey"',
-  '"garage door repair" "brooklyn" OR "queens" OR "bronx" OR "staten island" OR "long island" "need" OR "help" -site:yelp.com -site:angi.com -site:thumbtack.com',
+  'site:craigslist.org "garage door" "broken" OR "stuck" OR "spring"',
+  'site:craigslist.org "garage door" "need" OR "looking for" OR "help"',
+  'site:reddit.com "garage door" broken OR stuck "brooklyn" OR "queens" OR "bronx" OR "long island" OR "new jersey"',
+  '"garage door" broken OR stuck "brooklyn" OR "queens" OR "bronx" OR "long island" -site:yelp.com -site:angi.com -site:thumbtack.com',
 ];
 
 const SKIP_DOMAINS = [
@@ -45,59 +32,47 @@ function shouldSkipUrl(url: string): boolean {
   try {
     const u = new URL(url);
     const host = u.hostname.replace(/^www\./, '');
-    if (SKIP_DOMAINS.some(d => host.includes(d))) return true;
-    if (u.pathname === '/' || u.pathname === '') return true;
-    return false;
+    return SKIP_DOMAINS.some(d => host.includes(d)) || u.pathname === '/' || u.pathname === '';
   } catch {
     return false;
   }
 }
 
-interface GoogleSearchItem {
+interface SerperResult {
   title: string;
   link: string;
   snippet: string;
-  pagemap?: {
-    metatags?: Array<{ 'article:published_time'?: string; 'og:updated_time'?: string }>;
-    newsarticle?: Array<{ datepublished?: string }>;
-  };
+  date?: string;
 }
 
-async function googleSearch(query: string, apiKey: string, cx: string): Promise<RawLead[]> {
-  // dateRestrict=w1 = past week
-  const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${cx}&q=${encodeURIComponent(query)}&num=10&dateRestrict=w1`;
+interface SerperResponse {
+  organic?: SerperResult[];
+}
 
-  const result = await fetchPage(url, {
-    acceptJson: true,
-    timeout: 10_000,
+async function serperSearch(query: string, apiKey: string): Promise<RawLead[]> {
+  const response = await fetch('https://google.serper.dev/search', {
+    method: 'POST',
+    headers: {
+      'X-API-KEY': apiKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ q: query, num: 10, tbs: 'qdr:w' }), // past week
   });
 
-  if (!result.ok) {
-    console.warn(`[google-search] API failed (${result.status})`);
+  if (!response.ok) {
+    console.warn(`[serper] API failed (${response.status})`);
     return [];
   }
 
   try {
-    const json = JSON.parse(result.text) as { items?: GoogleSearchItem[]; error?: { message: string } };
-
-    if (json.error) {
-      console.warn(`[google-search] API error: ${json.error.message}`);
-      return [];
-    }
-
+    const json = await response.json() as SerperResponse;
     const leads: RawLead[] = [];
-    for (const item of json.items ?? []) {
+
+    for (const item of json.organic ?? []) {
       const cleanedUrl = cleanUrl(item.link);
       if (shouldSkipUrl(cleanedUrl)) continue;
 
-      // Try to extract publish date from page metadata
-      const metatags = item.pagemap?.metatags?.[0];
-      const rawDate =
-        metatags?.['article:published_time'] ??
-        metatags?.['og:updated_time'] ??
-        item.pagemap?.newsarticle?.[0]?.datepublished;
-
-      const { date: postedAt, accuracy } = resolveDate(rawDate);
+      const { date: postedAt, accuracy } = resolveDate(item.date);
 
       leads.push({
         title: item.title,
@@ -106,13 +81,13 @@ async function googleSearch(query: string, apiKey: string, cx: string): Promise<
         postedAt,
         postedAtAccuracy: accuracy,
         matchedKeyword: query,
-        rawMetadata: { source: 'google-search' },
+        rawMetadata: { source: 'serper' },
       });
     }
 
     return leads;
   } catch (err) {
-    console.error('[google-search] JSON parse error:', err);
+    console.error('[serper] parse error:', err);
     return [];
   }
 }
@@ -121,27 +96,24 @@ export async function fetchFallbackLeads(
   _areaKey: string,
   _timeFilter: 'today' | 'this_week'
 ): Promise<SourceResult> {
-  const apiKey = process.env.GOOGLE_SEARCH_API_KEY;
-  const cx = process.env.GOOGLE_SEARCH_ENGINE_ID;
+  const apiKey = process.env.SERPER_API_KEY;
 
-  if (!apiKey || !cx) {
+  if (!apiKey) {
     return {
       sourceKey: 'fallback',
       sourceName: 'Google Search',
       status: 'Blocked',
       leads: [],
-      note: 'Add GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_ENGINE_ID to Vercel env vars. Both are free — see setup instructions in src/sources/fallbackDiscovery.ts',
+      note: 'Add SERPER_API_KEY to Vercel env vars. Free at serper.dev (2,500 searches, no credit card).',
       fetchedAt: new Date(),
     };
   }
 
-  // Run all queries in parallel
   const results = await Promise.all(
-    SEARCH_QUERIES.map(q => googleSearch(q, apiKey, cx).catch(() => [] as RawLead[]))
+    SEARCH_QUERIES.map(q => serperSearch(q, apiKey).catch(() => [] as RawLead[]))
   );
 
   const allLeads = results.flat();
-
   const seen = new Set<string>();
   const dedupedLeads = allLeads.filter(l => {
     if (seen.has(l.url)) return false;
@@ -154,7 +126,7 @@ export async function fetchFallbackLeads(
     sourceName: 'Google Search',
     status: dedupedLeads.length > 0 ? 'Working' : 'Partial',
     leads: dedupedLeads,
-    note: dedupedLeads.length === 0 ? 'Google Search returned no results. Check your GOOGLE_SEARCH_ENGINE_ID is configured to search the entire web.' : undefined,
+    note: dedupedLeads.length === 0 ? 'No results found. Your SERPER_API_KEY may be invalid or exhausted.' : undefined,
     fetchedAt: new Date(),
   };
 }
