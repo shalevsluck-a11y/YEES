@@ -110,8 +110,12 @@ export function isWithinTimeFilter(
   accuracy: DateAccuracy,
   timeFilter: 'today' | 'this_week'
 ): boolean {
-  // If date is unknown, include it (don't exclude based on uncertainty)
-  if (!date || accuracy === 'Unknown') return true;
+  // If date is unknown OR estimated, include it.
+  // Estimated dates come from snippet text like "3 days ago" which is not
+  // reliable enough to use for strict filtering — a lead estimated as "3 days ago"
+  // could have been posted at any time. We prefer showing too many leads over
+  // hiding genuine homeowner requests because of uncertain date parsing.
+  if (!date || accuracy === 'Unknown' || accuracy === 'Estimated') return true;
 
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);

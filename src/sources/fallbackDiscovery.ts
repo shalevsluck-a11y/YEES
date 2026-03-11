@@ -41,18 +41,17 @@ const SEARCH_QUERIES = [
   'site:reddit.com intitle:"garage door" (broken OR stuck OR spring OR repair OR help OR recommend)',
 
   // ── Facebook public groups / community pages ──────────────────────────────
-  // Google indexes many public Facebook Group posts. Neighborhood pages
-  // frequently have homeowners asking for contractor recommendations.
-  'site:facebook.com intitle:"garage door" (broken OR stuck OR "need" OR "recommend" OR "won\'t open") (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island")',
-  'site:facebook.com "garage door" ("can anyone recommend" OR "looking for" OR "need someone to fix" OR "need a good" OR "spring broke" OR "cable broke") (nyc OR brooklyn OR queens OR "long island" OR "new jersey")',
+  // Google indexes many public Facebook Group posts. Do NOT use intitle: here —
+  // Facebook HTML page titles are "Facebook" or the group name, never the post text.
+  'site:facebook.com "garage door" (broken OR stuck OR "won\'t open" OR "need someone" OR "can anyone recommend" OR "spring broke") (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island")',
+  'site:facebook.com "garage door" ("looking for" OR "need a good" OR "recommend" OR "cable broke" OR "off track") (nyc OR brooklyn OR queens OR "long island" OR "new jersey" OR "staten island")',
 
   // ── Nextdoor (public posts indexed by Google) ─────────────────────────────
   'site:nextdoor.com "garage door" (broken OR stuck OR "need" OR "recommend" OR repair) (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island")',
 
   // ── Patch.com community / classifieds ────────────────────────────────────
-  // Restrict to posts where the title mentions garage door to avoid news articles
-  // where "garage door" only appears in a sidebar ad.
-  'site:patch.com intitle:"garage door" (broken OR stuck OR repair OR spring OR "won\'t open" OR need)',
+  // Do NOT use intitle: — Patch page titles are "Brooklyn Patch" style, not post content.
+  'site:patch.com "garage door" (broken OR stuck OR repair OR spring OR "won\'t open" OR need OR recommend) (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island")',
 
   // ── Open web: personal first-person language (never appears on contractor sites)
   '("my garage door" OR "our garage door") (broken OR "won\'t open" OR "won\'t close" OR stuck OR "spring broke" OR "cable broke" OR "off track") (brooklyn OR queens OR bronx OR nyc OR "long island" OR "new jersey" OR "staten island") -site:yelp.com -site:angi.com -site:thumbtack.com -site:homeadvisor.com -site:houzz.com',

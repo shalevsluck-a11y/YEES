@@ -8,7 +8,7 @@ import ResultsSummary from '@/components/ResultsSummary';
 import SourceStatusPanel from '@/components/SourceStatusPanel';
 
 const DEFAULT_FILTERS: SearchFilters = {
-  timeFilter: 'today',
+  timeFilter: 'this_week',
   areaFilter: 'all',
   sourceFilter: 'all',
   hideBusinessAds: true,
