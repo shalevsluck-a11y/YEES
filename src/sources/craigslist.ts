@@ -95,8 +95,8 @@ export async function fetchCraigslistLeads(
 
   const allLeads: RawLead[] = [];
   const domains = getCraigslistDomains(areaKey).map(d => CL_DOMAINS[d] ?? d);
-  // 2 domains × 3 queries = 6 ScraperAPI credits per search
-  const queries = FOCUSED_QUERIES.slice(0, 3);
+  // 2 domains × 2 queries = 4 ScraperAPI credits per search
+  const queries = FOCUSED_QUERIES.slice(0, 2);
 
   let fetchSuccesses = 0;
   let fetchErrors = 0;
@@ -108,7 +108,7 @@ export async function fetchCraigslistLeads(
       const rssUrl = buildRssUrl(domain, 'lbg', query);
       const fetchUrl = wrapWithScraper(rssUrl, scraperApiKey);
       tasks.push(
-        fetchPage(fetchUrl, { acceptXml: true, timeout: 25_000 })
+        fetchPage(fetchUrl, { acceptXml: true, timeout: 7_000 })
           .then(result => {
             if (!result.ok) {
               fetchErrors++;

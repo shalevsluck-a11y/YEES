@@ -104,7 +104,7 @@ async function runSources(
 ): Promise<SourceResult[]> {
   const shouldRun = (key: string) => sourceFilter === 'all' || sourceFilter === key;
 
-  // Map of source key → fetch function
+  // Map of source key → fetch function (all run in parallel)
   const sourceFns: [string, () => Promise<SourceResult>][] = [
     ['craigslist', () => fetchCraigslistLeads(areaKey, timeFilter)],
     ['reddit', () => fetchForumLeads(areaKey, timeFilter)],
@@ -112,14 +112,15 @@ async function runSources(
     ['offerup', () => fetchOfferUpLeads(areaKey, timeFilter)],
     ['facebook', () => fetchFacebookLeads(areaKey, timeFilter)],
     ['yelp', () => fetchYelpLeads(areaKey, timeFilter)],
+    ['fallback', () => fetchFallbackLeads(areaKey, timeFilter)],
   ];
 
-  // Run all sources concurrently with per-source timeout
+  // 8s per-source timeout — keeps us within Vercel's 10s free plan limit
   const results = await Promise.all(
     sourceFns
       .filter(([key]) => shouldRun(key))
       .map(([key, fn]) =>
-        withTimeout(fn(), 30_000, key).catch(err => ({
+        withTimeout(fn(), 8_000, key).catch(err => ({
           sourceKey: key,
           sourceName: key,
           status: 'Blocked' as const,
@@ -129,23 +130,6 @@ async function runSources(
         }))
       )
   );
-
-  // Always run Bing — it's our primary working source alongside Craigslist
-  if (sourceFilter === 'all' || sourceFilter === 'fallback') {
-    const bingResult = await withTimeout(
-      fetchFallbackLeads(areaKey, timeFilter),
-      30_000,
-      'fallback'
-    ).catch(err => ({
-      sourceKey: 'fallback',
-      sourceName: 'Bing Search',
-      status: 'Blocked' as const,
-      leads: [],
-      error: String(err),
-      fetchedAt: new Date(),
-    }));
-    results.push(bingResult);
-  }
 
   return results;
 }
