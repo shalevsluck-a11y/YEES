@@ -2,15 +2,16 @@ import type { SourceConfig } from '@/types/source';
 
 // ============================================================
 // SOURCE CONFIGURATION
-// Each source has an expected status based on current
-// scraping feasibility. Be honest about limitations.
+// Only active sources are listed — permanently blocked ones
+// (Facebook, OfferUp, Yelp) have been removed. Their coverage
+// is handled indirectly by Bing and Google/Serper queries.
 // ============================================================
 
 export const SOURCE_CONFIGS: SourceConfig[] = [
   {
     key: 'craigslist',
     name: 'Craigslist',
-    description: 'Direct RSS feed adapter for gigs sections. Best source for actual homeowner requests.',
+    description: 'RSS feed of gigs/labor sections. Best source for direct homeowner requests. Requires SCRAPER_API_KEY to bypass datacenter IP block.',
     enabled: true,
     phase: 1,
     expectedStatus: 'Working',
@@ -18,50 +19,50 @@ export const SOURCE_CONFIGS: SourceConfig[] = [
   {
     key: 'reddit',
     name: 'Reddit / Public Forums',
-    description: 'Searches public subreddits for homeowner requests. Uses Reddit public JSON API.',
-    enabled: true,
-    phase: 1,
-    expectedStatus: 'Working',
-  },
-  {
-    key: 'classifieds',
-    name: 'Public Classifieds',
-    description: 'Searches Locanto and similar public classified sites.',
+    description: 'Uses Reddit public JSON API (no auth needed). Searches r/HomeImprovement, r/DIY, and area-specific subs like r/brooklyn, r/longisland.',
     enabled: true,
     phase: 1,
     expectedStatus: 'Partial',
   },
   {
-    key: 'offerup',
-    name: 'OfferUp',
-    description: 'OfferUp blocks automated access. No reliable public search without login.',
+    key: 'classifieds',
+    name: 'Public Classifieds (Locanto / Oodle / Geebo / Hoobly)',
+    description: 'Scrapes four free classified sites for garage door service requests in NYC/NJ.',
     enabled: true,
-    phase: 2,
+    phase: 1,
+    expectedStatus: 'Partial',
+  },
+  {
+    key: 'bing',
+    name: 'Bing Search (Nextdoor / Reddit / Facebook / Forums)',
+    description: 'Bing API searches across Nextdoor, Reddit, Patch.com, and Facebook public pages. Free 1,000 searches/month on Azure F0 tier. Add BING_API_KEY to enable.',
+    enabled: true,
+    phase: 1,
     expectedStatus: 'Blocked',
   },
   {
-    key: 'facebook',
-    name: 'Facebook Marketplace',
-    description: 'Facebook requires login for all Marketplace access. Cannot be scraped publicly.',
+    key: 'bark',
+    name: 'Bark.com (Service Requests)',
+    description: 'Scrapes Bark.com results pages where homeowners post garage door service requests. No login required. Works better with SCRAPER_API_KEY.',
     enabled: true,
-    phase: 2,
-    expectedStatus: 'Blocked',
+    phase: 1,
+    expectedStatus: 'Partial',
   },
   {
-    key: 'yelp',
-    name: 'Yelp / Request Pages',
-    description: 'Yelp Request-a-Quote is behind login. Limited public data available.',
+    key: 'patch',
+    name: 'Patch.com (Local Classifieds)',
+    description: 'Scrapes local classifieds on Patch.com for NYC boroughs and North Jersey neighborhoods. No login required.',
     enabled: true,
-    phase: 2,
+    phase: 1,
     expectedStatus: 'Partial',
   },
   {
     key: 'fallback',
-    name: 'Fallback Discovery (Bing)',
-    description: 'Uses Bing search with site: operators when direct source access fails. Fallback only.',
+    name: 'Google Search (Serper)',
+    description: 'Google Search API via Serper.dev. Searches Reddit, Nextdoor, Craigslist, Patch, Facebook, and Bark through Google index. Free 2,500 searches, no credit card. Add SERPER_API_KEY to enable.',
     enabled: true,
     phase: 1,
-    expectedStatus: 'Fallback Mode',
+    expectedStatus: 'Blocked',
   },
 ];
 

@@ -6,13 +6,19 @@ import type { SourceResult } from '@/types/source';
 // On Hobby plan Vercel caps at 10s — upgrade to Pro for full functionality.
 export const maxDuration = 60;
 
+// Active sources — all return real leads without requiring login
 import { fetchCraigslistLeads } from '@/sources/craigslist';
-import { fetchForumLeads } from '@/sources/forums';
+import { fetchForumLeads }      from '@/sources/forums';
 import { fetchClassifiedLeads } from '@/sources/classifieds';
-import { fetchOfferUpLeads } from '@/sources/offerup';
-import { fetchFacebookLeads } from '@/sources/facebookPublic';
-import { fetchYelpLeads } from '@/sources/yelpPublic';
-import { fetchFallbackLeads } from '@/sources/fallbackDiscovery';
+import { fetchBingLeads }       from '@/sources/bing';
+import { fetchBarkLeads }       from '@/sources/bark';
+import { fetchPatchLeads }      from '@/sources/patch';
+import { fetchFallbackLeads }   from '@/sources/fallbackDiscovery';
+
+// Removed sources (permanently blocked — no public access):
+//   Facebook Marketplace  → covered via site:facebook.com queries in Bing + Serper
+//   OfferUp               → requires JS rendering + Cloudflare, no public API
+//   Yelp                  → returns only competitor business listings, not homeowner requests
 
 import { normalizeLead, sortLeads } from '@/lib/normalization';
 import { deduplicateLeads } from '@/lib/dedup';
@@ -65,7 +71,7 @@ export async function POST(req: NextRequest) {
 
   // Counts before filtering
   const veryLikelyCount = allLeads.filter(l => l.classification === 'Very Likely Lead').length;
-  const possibleCount = allLeads.filter(l => l.classification === 'Possible Lead').length;
+  const possibleCount   = allLeads.filter(l => l.classification === 'Possible Lead').length;
   const businessAdCount = allLeads.filter(l => l.classification === 'Business Ad / Ignore').length;
 
   // Filter out business ads if requested
@@ -96,7 +102,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(response);
 }
 
-// Run all relevant sources, catching individual failures
+// Run all active sources in parallel, each with a per-source timeout
 async function runSources(
   sourceFilter: string,
   areaKey: string,
@@ -104,18 +110,16 @@ async function runSources(
 ): Promise<SourceResult[]> {
   const shouldRun = (key: string) => sourceFilter === 'all' || sourceFilter === key;
 
-  // Map of source key → fetch function (all run in parallel)
   const sourceFns: [string, () => Promise<SourceResult>][] = [
     ['craigslist', () => fetchCraigslistLeads(areaKey, timeFilter)],
-    ['reddit', () => fetchForumLeads(areaKey, timeFilter)],
-    ['classifieds', () => fetchClassifiedLeads(areaKey, timeFilter)],
-    ['offerup', () => fetchOfferUpLeads(areaKey, timeFilter)],
-    ['facebook', () => fetchFacebookLeads(areaKey, timeFilter)],
-    ['yelp', () => fetchYelpLeads(areaKey, timeFilter)],
-    ['fallback', () => fetchFallbackLeads(areaKey, timeFilter)],
+    ['reddit',     () => fetchForumLeads(areaKey, timeFilter)],
+    ['classifieds',() => fetchClassifiedLeads(areaKey, timeFilter)],
+    ['bing',       () => fetchBingLeads(areaKey, timeFilter)],
+    ['bark',       () => fetchBarkLeads(areaKey, timeFilter)],
+    ['patch',      () => fetchPatchLeads(areaKey, timeFilter)],
+    ['fallback',   () => fetchFallbackLeads(areaKey, timeFilter)],
   ];
 
-  // 8s per-source timeout — keeps us within Vercel's 10s free plan limit
   const results = await Promise.all(
     sourceFns
       .filter(([key]) => shouldRun(key))

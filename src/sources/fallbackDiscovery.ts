@@ -17,15 +17,41 @@ import { resolveDate } from '@/lib/dateResolution';
 import { cleanUrl } from '@/lib/urlResolver';
 
 const SEARCH_QUERIES = [
+  // Craigslist gigs — homeowners posting directly
   'site:craigslist.org "garage door" "broken" OR "stuck" OR "spring"',
   'site:craigslist.org "garage door" "need" OR "looking for" OR "help"',
+
+  // Reddit homeowner posts in local subs
   'site:reddit.com "garage door" broken OR stuck "brooklyn" OR "queens" OR "bronx" OR "long island" OR "new jersey"',
-  '"garage door" broken OR stuck "brooklyn" OR "queens" OR "bronx" OR "long island" -site:yelp.com -site:angi.com -site:thumbtack.com',
+  'site:reddit.com "my garage door" (broken OR stuck OR "not working" OR "won\'t open" OR spring OR cable) -"how to fix" -"i fixed"',
+
+  // Patch.com local classifieds and community posts
+  'site:patch.com "garage door" (broken OR stuck OR repair OR spring OR "need help") (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island")',
+
+  // Nextdoor public posts indexed by Google
+  'site:nextdoor.com "garage door" (broken OR stuck OR repair OR "need") (brooklyn OR queens OR "long island" OR "new jersey")',
+
+  // Bark.com customer service requests
+  'site:bark.com "garage door" (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "new york")',
+
+  // Facebook public community groups (Google indexes some)
+  'site:facebook.com "garage door" (broken OR "need repair" OR "recommend") (brooklyn OR queens OR "new york" OR "new jersey")',
+
+  // Broad homeowner-intent search — catches anything not on directories
+  '"my garage door" (broken OR "won\'t open" OR stuck OR "off track" OR "spring broke" OR "cable broke") (brooklyn OR queens OR bronx OR nyc OR "long island" OR "new jersey") -site:yelp.com -site:angi.com -site:thumbtack.com -site:homeadvisor.com',
+
+  // Local community boards / neighborhood forums
+  '"looking for" "garage door" (repair OR fix OR service) (brooklyn OR queens OR bronx OR "long island" OR "new jersey" OR "staten island") -site:yelp.com -site:angi.com',
+
+  // General fresh posts with strong homeowner intent signals
+  '"garage door" ("broken spring" OR "broken cable" OR "off track" OR "won\'t close" OR "won\'t open" OR "stuck open" OR "stuck closed") (nyc OR brooklyn OR queens OR bronx OR "long island" OR "new jersey")',
 ];
 
 const SKIP_DOMAINS = [
   'yelp.com', 'angi.com', 'thumbtack.com', 'homeadvisor.com',
   'houzz.com', 'bbb.org', 'yellowpages.com', 'angieslist.com',
+  'amazon.com', 'homedepot.com', 'lowes.com', 'wikipedia.org',
+  'fixr.com', 'costimates.com', 'improvenet.com', 'porch.com',
 ];
 
 function shouldSkipUrl(url: string): boolean {

@@ -111,6 +111,130 @@ async function fetchLocanto(query: string, location: string): Promise<RawLead[]>
   return leads;
 }
 
+// --- Geebo ---
+
+async function fetchGeebo(query: string): Promise<RawLead[]> {
+  const leads: RawLead[] = [];
+  // Geebo free classifieds — services section, NY
+  const encodedQuery = encodeURIComponent(query);
+  const url = `https://geebo.com/classifieds/new-york--ny/services-offered/?q=${encodedQuery}`;
+
+  const result = await fetchPage(url);
+  if (!result.ok) {
+    console.warn(`[classifieds/geebo] Failed (${result.status}): ${url}`);
+    return [];
+  }
+
+  try {
+    const $ = cheerio.load(result.text);
+
+    // Geebo uses simple listing cards
+    const $listings = $('.listing, .item, article, [class*="classified"]');
+
+    $listings.each((_, el) => {
+      const titleEl   = $(el).find('h2, h3, .title, a[class*="title"]').first();
+      const linkEl    = $(el).find('a[href]').first();
+      const snippetEl = $(el).find('p, .description, .snippet').first();
+      const dateEl    = $(el).find('[class*="date"], time').first();
+
+      const title   = titleEl.text().trim();
+      const href    = linkEl.attr('href') ?? '';
+      const snippet = snippetEl.text().trim();
+      const rawDate = dateEl.attr('datetime') ?? dateEl.text().trim();
+
+      if (!title || !href) return;
+
+      const url = href.startsWith('http') ? href : `https://geebo.com${href}`;
+      const { date: postedAt, accuracy } = resolveDate(rawDate);
+
+      leads.push({
+        title,
+        url,
+        snippet: snippet.slice(0, 400),
+        postedAt,
+        postedAtAccuracy: accuracy,
+        matchedKeyword: query,
+        rawMetadata: { source: 'geebo' },
+      });
+    });
+
+    // Fallback: scan for listing links
+    if (leads.length === 0) {
+      $('a[href*="/classifieds/"]').each((_, el) => {
+        const href  = $(el).attr('href') ?? '';
+        const title = $(el).text().trim();
+        if (!title || title.length < 5) return;
+        leads.push({
+          title,
+          url: href.startsWith('http') ? href : `https://geebo.com${href}`,
+          snippet: '',
+          postedAt: null,
+          postedAtAccuracy: 'Unknown',
+          matchedKeyword: query,
+          rawMetadata: { source: 'geebo', fallbackParsed: true },
+        });
+      });
+    }
+  } catch (err) {
+    console.error('[classifieds/geebo] Parse error:', err);
+  }
+
+  return leads;
+}
+
+// --- Hoobly ---
+
+async function fetchHoobly(query: string): Promise<RawLead[]> {
+  const leads: RawLead[] = [];
+  // Hoobly free classifieds — category 10 = services, p/new-york = NY location
+  const encodedQuery = encodeURIComponent(query);
+  const url = `https://www.hoobly.com/cat/10/p/new-york/?search=${encodedQuery}`;
+
+  const result = await fetchPage(url);
+  if (!result.ok) {
+    console.warn(`[classifieds/hoobly] Failed (${result.status}): ${url}`);
+    return [];
+  }
+
+  try {
+    const $ = cheerio.load(result.text);
+
+    // Hoobly listing rows / cards
+    const $listings = $('tr[class*="row"], .ad-listing, article, [class*="listing"]');
+
+    $listings.each((_, el) => {
+      const titleEl   = $(el).find('h2, h3, a.title, a[class*="title"], a').first();
+      const linkEl    = $(el).find('a[href]').first();
+      const snippetEl = $(el).find('p, .desc, .description').first();
+      const dateEl    = $(el).find('[class*="date"], time, .posted').first();
+
+      const title   = titleEl.text().trim();
+      const href    = linkEl.attr('href') ?? '';
+      const snippet = snippetEl.text().trim();
+      const rawDate = dateEl.attr('datetime') ?? dateEl.text().trim();
+
+      if (!title || !href) return;
+
+      const url = href.startsWith('http') ? href : `https://www.hoobly.com${href}`;
+      const { date: postedAt, accuracy } = resolveDate(rawDate);
+
+      leads.push({
+        title,
+        url,
+        snippet: snippet.slice(0, 400),
+        postedAt,
+        postedAtAccuracy: accuracy,
+        matchedKeyword: query,
+        rawMetadata: { source: 'hoobly' },
+      });
+    });
+  } catch (err) {
+    console.error('[classifieds/hoobly] Parse error:', err);
+  }
+
+  return leads;
+}
+
 // --- Oodle ---
 
 async function fetchOodle(query: string): Promise<RawLead[]> {
@@ -189,7 +313,23 @@ export async function fetchClassifiedLeads(
       fetchSuccesses++;
       allLeads.push(...oodleLeads);
     }
-    await sleep(500);
+    await sleep(400);
+
+    // Try Geebo
+    const geeboLeads = await fetchGeebo(query);
+    if (geeboLeads.length > 0) {
+      fetchSuccesses++;
+      allLeads.push(...geeboLeads);
+    }
+    await sleep(400);
+
+    // Try Hoobly
+    const hooblyLeads = await fetchHoobly(query);
+    if (hooblyLeads.length > 0) {
+      fetchSuccesses++;
+      allLeads.push(...hooblyLeads);
+    }
+    await sleep(400);
   }
 
   const seen = new Set<string>();
@@ -202,8 +342,8 @@ export async function fetchClassifiedLeads(
   const status = fetchSuccesses === 0 ? 'Blocked' : 'Partial';
   const note =
     status === 'Blocked'
-      ? 'Classified sites (Locanto, Oodle) could not be reached or returned no HTML results. These sites frequently block scrapers.'
-      : `Fetched from public classifieds. Results may be incomplete as these sites partially block automated access.`;
+      ? 'Classified sites (Locanto, Oodle, Geebo, Hoobly) could not be reached or returned no HTML results. These sites frequently block scrapers.'
+      : `Fetched from public classifieds (Locanto, Oodle, Geebo, Hoobly). Results may be incomplete as these sites partially block automated access.`;
 
   return {
     sourceKey: 'classifieds',
