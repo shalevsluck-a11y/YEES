@@ -39,10 +39,19 @@ export function normalizeLead(raw: RawLead, ctx: NormalizationContext): Lead {
   // be genuine homeowner posts. Give a modest +20 boost to offset the penalty
   // caused by contractor ad language that appears in Google-generated snippets.
   const score = ctx.isFallbackDiscovered ? Math.min(100, rawScore + 20) : rawScore;
-  const classification =
-    score >= 80 ? 'Very Likely Lead' :
-    score >= 55 ? 'Possible Lead' :
-    rawClass;
+
+  // For search-engine leads (Google/Bing), apply lenient thresholds.
+  // Reason: Google snippets often contain contractor ad text from surrounding
+  // page content (not the actual post body), which inflates "Business Ad" penalties
+  // on genuine homeowner posts. The title filter + job posting filter already
+  // eliminated true junk before scoring, so surviving leads deserve benefit of doubt.
+  const classification = ctx.isFallbackDiscovered
+    ? score >= 75 ? 'Very Likely Lead'
+      : score >= 40 ? 'Possible Lead'
+      : 'Business Ad / Ignore'
+    : score >= 80 ? 'Very Likely Lead'
+      : score >= 55 ? 'Possible Lead'
+      : rawClass;
 
   return {
     id: uuidv4(),

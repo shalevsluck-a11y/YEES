@@ -14,25 +14,28 @@ function normalizeUrl(url: string): string {
   }
 }
 
-// Simple string similarity (0–1) using character overlap
+// Word-level Jaccard similarity (0–1).
+// Two strings are "similar" if they share a high proportion of unique words.
+// This correctly distinguishes two different garage-door posts (they share
+// domain vocabulary but differ in meaning) from true duplicates (same post
+// scraped twice with slightly different URLs).
 function similarity(a: string, b: string): number {
-  const s1 = a.toLowerCase().trim();
-  const s2 = b.toLowerCase().trim();
-  if (s1 === s2) return 1;
-  if (!s1 || !s2) return 0;
+  const tokenize = (s: string) =>
+    new Set(s.toLowerCase().trim().split(/\W+/).filter(w => w.length > 2));
 
-  const longer = s1.length > s2.length ? s1 : s2;
-  const shorter = s1.length > s2.length ? s2 : s1;
-  const longerLen = longer.length;
+  const wordsA = tokenize(a);
+  const wordsB = tokenize(b);
 
-  if (longerLen === 0) return 1;
+  if (wordsA.size === 0 && wordsB.size === 0) return 1;
+  if (wordsA.size === 0 || wordsB.size === 0) return 0;
 
-  let matches = 0;
-  for (let i = 0; i < shorter.length; i++) {
-    if (longer.includes(shorter[i])) matches++;
+  let intersection = 0;
+  for (const w of wordsA) {
+    if (wordsB.has(w)) intersection++;
   }
+  const union = wordsA.size + wordsB.size - intersection;
 
-  return matches / longerLen;
+  return intersection / union;
 }
 
 // Deduplicate leads by URL, title similarity, and snippet similarity
