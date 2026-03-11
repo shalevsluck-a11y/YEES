@@ -18,8 +18,6 @@ import { normalizeLead, sortLeads } from '@/lib/normalization';
 import { deduplicateLeads } from '@/lib/dedup';
 import { isWithinTimeFilter } from '@/lib/dateResolution';
 
-// How many leads a source needs to return before we skip fallback
-const FALLBACK_THRESHOLD = 5;
 
 export async function POST(req: NextRequest) {
   let filters: SearchFilters;
@@ -132,42 +130,21 @@ async function runSources(
       )
   );
 
-  // Decide if fallback is needed
-  const primaryLeadCount = results.reduce((sum, r) => sum + r.leads.length, 0);
-  const needsFallback =
-    (sourceFilter === 'all' || sourceFilter === 'fallback') &&
-    primaryLeadCount < FALLBACK_THRESHOLD;
-
-  if (needsFallback) {
-    console.log(`[search] Primary sources returned ${primaryLeadCount} leads — running fallback.`);
-    const fallbackResult = await withTimeout(
+  // Always run Bing — it's our primary working source alongside Craigslist
+  if (sourceFilter === 'all' || sourceFilter === 'fallback') {
+    const bingResult = await withTimeout(
       fetchFallbackLeads(areaKey, timeFilter),
       30_000,
       'fallback'
     ).catch(err => ({
       sourceKey: 'fallback',
-      sourceName: 'Fallback Discovery (Bing)',
+      sourceName: 'Bing Search',
       status: 'Blocked' as const,
       leads: [],
       error: String(err),
       fetchedAt: new Date(),
     }));
-    results.push(fallbackResult);
-  } else if (sourceFilter === 'fallback') {
-    // User explicitly requested fallback source
-    const fallbackResult = await withTimeout(
-      fetchFallbackLeads(areaKey, timeFilter),
-      30_000,
-      'fallback'
-    ).catch(err => ({
-      sourceKey: 'fallback',
-      sourceName: 'Fallback Discovery (Bing)',
-      status: 'Blocked' as const,
-      leads: [],
-      error: String(err),
-      fetchedAt: new Date(),
-    }));
-    results.push(fallbackResult);
+    results.push(bingResult);
   }
 
   return results;
