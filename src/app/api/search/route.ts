@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { SearchFilters, SearchResponse, Lead } from '@/types/lead';
 import type { SourceResult } from '@/types/source';
 
+// Tell Vercel to allow up to 60s for this function (requires Pro plan).
+// On Hobby plan Vercel caps at 10s — upgrade to Pro for full functionality.
+export const maxDuration = 60;
+
 import { fetchCraigslistLeads } from '@/sources/craigslist';
 import { fetchForumLeads } from '@/sources/forums';
 import { fetchClassifiedLeads } from '@/sources/classifieds';
