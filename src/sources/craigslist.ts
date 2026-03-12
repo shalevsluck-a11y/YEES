@@ -52,7 +52,7 @@ function buildRssUrl(domain: string, category: string, query: string): string {
 }
 
 function wrapWithScraper(targetUrl: string, apiKey: string): string {
-  return `https://api.scraperapi.com?api_key=${apiKey}&url=${encodeURIComponent(targetUrl)}`;
+  return `https://api.scraperapi.com?api_key=${apiKey}&country_code=us&url=${encodeURIComponent(targetUrl)}`;
 }
 
 function parseRss(xml: string, query: string): RawLead[] {
@@ -96,16 +96,18 @@ export async function fetchCraigslistLeads(
     let fetchSuccesses = 0;
     let fetchErrors = 0;
 
+    const failStatuses: number[] = [];
     const tasks: Promise<void>[] = [];
     for (const domain of domains.slice(0, 2)) {
       for (const query of queries) {
         const rssUrl = buildRssUrl(domain, 'lbg', query);
         const fetchUrl = wrapWithScraper(rssUrl, scraperApiKey);
         tasks.push(
-          fetchPage(fetchUrl, { acceptXml: true, timeout: 10_000 })
+          fetchPage(fetchUrl, { acceptXml: true, timeout: 15_000 })
             .then(result => {
               if (!result.ok) {
                 fetchErrors++;
+                failStatuses.push(result.status);
                 console.error(`[craigslist] ScraperAPI request failed: status=${result.status} error=${result.error ?? ''} url=${rssUrl}`);
               } else {
                 allLeads.push(...parseRss(result.text, query));
@@ -114,6 +116,7 @@ export async function fetchCraigslistLeads(
             })
             .catch(err => {
               fetchErrors++;
+              failStatuses.push(0);
               console.error(`[craigslist] ScraperAPI fetch threw: ${err} url=${rssUrl}`);
             })
         );
@@ -135,7 +138,7 @@ export async function fetchCraigslistLeads(
       status,
       leads: dedupedLeads,
       note: status === 'Blocked'
-        ? 'ScraperAPI requests failed. Verify your SCRAPER_API_KEY in Vercel env vars.'
+        ? `ScraperAPI requests all failed (status codes: ${failStatuses.join(', ') || 'timeout'}). ${failStatuses.some(s => s === 401 || s === 403) ? 'Key may be invalid or out of credits.' : 'Craigslist may be blocking — try enabling premium proxies in ScraperAPI dashboard.'}`
         : status === 'Partial'
           ? `${fetchErrors} of ${fetchErrors + fetchSuccesses} requests failed.`
           : undefined,
