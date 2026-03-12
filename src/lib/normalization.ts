@@ -36,21 +36,21 @@ export function normalizeLead(raw: RawLead, ctx: NormalizationContext): Lead {
 
   // Search-engine leads (Google/Bing) are pre-filtered by title relevance and
   // job-posting filters before scoring, so surviving results are more likely to
-  // be genuine homeowner posts. Give a modest +20 boost to offset the penalty
+  // be genuine homeowner posts. Give a modest +15 boost to offset the penalty
   // caused by contractor ad language that appears in Google-generated snippets.
-  const score = ctx.isFallbackDiscovered ? Math.min(100, rawScore + 20) : rawScore;
+  // Only boost if the raw score shows some homeowner signals (>= 40), not for junk.
+  const score = ctx.isFallbackDiscovered && rawScore >= 40
+    ? Math.min(100, rawScore + 15)
+    : rawScore;
 
-  // For search-engine leads (Google/Bing), apply lenient thresholds.
-  // Reason: Google snippets often contain contractor ad text from surrounding
-  // page content (not the actual post body), which inflates "Business Ad" penalties
-  // on genuine homeowner posts. The title filter + job posting filter already
-  // eliminated true junk before scoring, so surviving leads deserve benefit of doubt.
+  // For search-engine leads (Google/Bing), apply slightly lenient thresholds.
+  // Raised "Possible Lead" floor from 55 → 62 to cut low-quality results.
   const classification = ctx.isFallbackDiscovered
     ? score >= 75 ? 'Very Likely Lead'
-      : score >= 55 ? 'Possible Lead'
+      : score >= 62 ? 'Possible Lead'
       : 'Business Ad / Ignore'
     : score >= 80 ? 'Very Likely Lead'
-      : score >= 55 ? 'Possible Lead'
+      : score >= 62 ? 'Possible Lead'
       : rawClass;
 
   return {

@@ -99,6 +99,14 @@ export function scoreLead(
     'we offer', 'call now', 'free estimate', 'licensed & insured',
     'serving nyc', 'years of experience', 'our technicians',
     'professional team', 'visit our', 'our company',
+    // Additional ad patterns
+    'call today', 'call us today', 'get a free', 'schedule service',
+    'schedule a service', 'we provide', 'we specialize', 'top 10 best',
+    'read reviews and see', 'see ratings for', 'we service all',
+    'i repair all', 'i install all', 'call for a free',
+    'best in the area', 'top rated', '#1 rated', 'award winning',
+    'certified garage', 'our prices', 'get an estimate', 'book now',
+    'serving the tri', 'serving all of', 'serving new york', 'serving new jersey',
   ];
   // Any matching homeowner phrase (with no ad phrase present) ensures score >= 55.
   const HOMEOWNER_PHRASES = [
@@ -111,6 +119,23 @@ export function scoreLead(
     businessAdSignals.push(...HARD_AD_PHRASES.filter(p => fullText.includes(p)).slice(0, 2));
   } else if (HOMEOWNER_PHRASES.some(p => fullText.includes(p))) {
     score = Math.max(score, 55);
+  }
+
+  // ── Out-of-area geographic penalty ─────────────────────────────────────
+  // If the text contains explicit non-target cities/states AND no target area
+  // was matched, this is an out-of-area result — force it out.
+  const OUT_OF_AREA_TERMS = [
+    'cleveland', 'indianapolis', 'chicago', 'los angeles', 'san francisco',
+    'san diego', 'houston', 'dallas', 'atlanta', 'denver', 'seattle',
+    'phoenix', 'miami', 'pittsburgh', 'nashville', 'minneapolis', 'charlotte',
+    'raleigh', 'columbus, oh', 'santa barbara', 'santa clarita', 'buellton',
+    'pawtucket', 'fall river', 'worcester', 'springfield, ma',
+    ', ca ', ', tx ', ', fl ', ', oh ', ', il ', ', ga ',
+    ', wa ', ', mn ', ', nc ', ', tn ', ', az ', ', co ',
+  ];
+  if (!areaMatched && OUT_OF_AREA_TERMS.some(t => fullText.includes(t))) {
+    score = Math.min(score, 29);
+    businessAdSignals.push('out of service area');
   }
 
   // ── Classify ───────────────────────────────────────────────────────────

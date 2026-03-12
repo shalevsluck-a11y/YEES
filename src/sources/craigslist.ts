@@ -132,18 +132,23 @@ export async function fetchCraigslistLeads(
     });
 
     const status = fetchSuccesses === 0 ? 'Blocked' : fetchErrors > fetchSuccesses ? 'Partial' : 'Working';
-    return {
-      sourceKey: 'craigslist',
-      sourceName: 'Craigslist',
-      status,
-      leads: dedupedLeads,
-      note: status === 'Blocked'
-        ? `ScraperAPI requests all failed (status codes: ${failStatuses.join(', ') || 'timeout'}). ${failStatuses.some(s => s === 401 || s === 403) ? 'Key may be invalid or out of credits.' : 'Craigslist may be blocking — try enabling premium proxies in ScraperAPI dashboard.'}`
-        : status === 'Partial'
-          ? `${fetchErrors} of ${fetchErrors + fetchSuccesses} requests failed.`
-          : undefined,
-      fetchedAt: new Date(),
-    };
+
+    // If completely blocked and Serper is available, fall through for hybrid results
+    if (status !== 'Blocked' || !serperApiKey) {
+      return {
+        sourceKey: 'craigslist',
+        sourceName: 'Craigslist',
+        status,
+        leads: dedupedLeads,
+        note: status === 'Blocked'
+          ? `ScraperAPI blocked (codes: ${failStatuses.join(', ') || 'timeout'}). ${failStatuses.some(s => s === 401 || s === 403) ? 'Key may be invalid — check ScraperAPI dashboard.' : 'Craigslist is blocking — falling back to Google index.'}`
+          : status === 'Partial'
+            ? `${fetchErrors} of ${fetchErrors + fetchSuccesses} ScraperAPI requests failed.`
+            : undefined,
+        fetchedAt: new Date(),
+      };
+    }
+    // ScraperAPI completely blocked — fall through to Serper below
   }
 
   // ── Fallback: Google Search (site:craigslist.org via Serper) ─────────────

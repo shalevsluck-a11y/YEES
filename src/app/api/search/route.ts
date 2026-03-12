@@ -123,11 +123,14 @@ async function runSources(
     ['fallback',   () => fetchFallbackLeads(areaKey, timeFilter)],
   ];
 
+  // Craigslist uses ScraperAPI which can take 15-20s — give it more time
+  const SOURCE_TIMEOUTS: Record<string, number> = { craigslist: 28_000 };
+
   const results = await Promise.all(
     sourceFns
       .filter(([key]) => shouldRun(key))
       .map(([key, fn]) =>
-        withTimeout(fn(), 8_000, key).catch(err => ({
+        withTimeout(fn(), SOURCE_TIMEOUTS[key] ?? 8_000, key).catch(err => ({
           sourceKey: key,
           sourceName: key,
           status: 'Blocked' as const,
