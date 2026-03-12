@@ -1,21 +1,6 @@
 /**
- * Facebook Marketplace / Public Posts Source Adapter
- *
- * STATUS: Blocked
- *
- * Facebook requires login for ALL access to:
- *   - Marketplace listings
- *   - Group posts
- *   - Neighborhood posts
- *
- * There is no public API or unauthenticated access point.
- * Meta actively blocks scrapers and regularly updates bot detection.
- *
- * This adapter returns Blocked status immediately.
- *
- * Do NOT fake support for this source.
+ * Facebook — DISABLED. Login required for all access. Returns 0 leads.
  */
-
 import type { SourceResult } from '@/types/source';
 
 export async function fetchFacebookLeads(
@@ -27,7 +12,7 @@ export async function fetchFacebookLeads(
     sourceName: 'Facebook Marketplace',
     status: 'Blocked',
     leads: [],
-    note: 'Facebook requires login for all Marketplace and group access. Cannot be scraped publicly. No workaround available without violating Facebook ToS.',
+    note: 'Facebook requires login for all access. Disabled.',
     fetchedAt: new Date(),
   };
 }

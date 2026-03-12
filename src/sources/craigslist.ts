@@ -52,7 +52,7 @@ function buildRssUrl(domain: string, category: string, query: string): string {
 }
 
 function wrapWithScraper(targetUrl: string, apiKey: string): string {
-  return `http://api.scraperapi.com?api_key=${apiKey}&url=${encodeURIComponent(targetUrl)}&render=false&residential=true&country_code=us`;
+  return `https://api.scraperapi.com?api_key=${apiKey}&url=${encodeURIComponent(targetUrl)}`;
 }
 
 function parseRss(xml: string, query: string): RawLead[] {
@@ -102,12 +102,20 @@ export async function fetchCraigslistLeads(
         const rssUrl = buildRssUrl(domain, 'lbg', query);
         const fetchUrl = wrapWithScraper(rssUrl, scraperApiKey);
         tasks.push(
-          fetchPage(fetchUrl, { acceptXml: true, timeout: 7_000 })
+          fetchPage(fetchUrl, { acceptXml: true, timeout: 10_000 })
             .then(result => {
-              if (!result.ok) { fetchErrors++; }
-              else { allLeads.push(...parseRss(result.text, query)); fetchSuccesses++; }
+              if (!result.ok) {
+                fetchErrors++;
+                console.error(`[craigslist] ScraperAPI request failed: status=${result.status} error=${result.error ?? ''} url=${rssUrl}`);
+              } else {
+                allLeads.push(...parseRss(result.text, query));
+                fetchSuccesses++;
+              }
             })
-            .catch(() => { fetchErrors++; })
+            .catch(err => {
+              fetchErrors++;
+              console.error(`[craigslist] ScraperAPI fetch threw: ${err} url=${rssUrl}`);
+            })
         );
       }
     }

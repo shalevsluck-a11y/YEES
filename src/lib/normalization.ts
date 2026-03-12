@@ -47,7 +47,7 @@ export function normalizeLead(raw: RawLead, ctx: NormalizationContext): Lead {
   // eliminated true junk before scoring, so surviving leads deserve benefit of doubt.
   const classification = ctx.isFallbackDiscovered
     ? score >= 75 ? 'Very Likely Lead'
-      : score >= 40 ? 'Possible Lead'
+      : score >= 55 ? 'Possible Lead'
       : 'Business Ad / Ignore'
     : score >= 80 ? 'Very Likely Lead'
       : score >= 55 ? 'Possible Lead'

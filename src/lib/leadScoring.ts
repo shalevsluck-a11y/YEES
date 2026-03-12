@@ -93,6 +93,26 @@ export function scoreLead(
   // ── Cap and floor ──────────────────────────────────────────────────────
   score = Math.max(0, Math.min(100, score));
 
+  // ── Hard overrides: explicit business-ad vs homeowner signals ──────────
+  // Any matching business ad phrase forces score below 30 (auto-hidden).
+  const HARD_AD_PHRASES = [
+    'we offer', 'call now', 'free estimate', 'licensed & insured',
+    'serving nyc', 'years of experience', 'our technicians',
+    'professional team', 'visit our', 'our company',
+  ];
+  // Any matching homeowner phrase (with no ad phrase present) ensures score >= 55.
+  const HOMEOWNER_PHRASES = [
+    'my garage', 'need help', 'broken', 'stuck', "won't open",
+    'need someone', 'looking for', 'can anyone', 'asap', 'urgent', 'help me',
+  ];
+  const hasHardAd = HARD_AD_PHRASES.some(p => fullText.includes(p));
+  if (hasHardAd) {
+    score = Math.min(score, 29);
+    businessAdSignals.push(...HARD_AD_PHRASES.filter(p => fullText.includes(p)).slice(0, 2));
+  } else if (HOMEOWNER_PHRASES.some(p => fullText.includes(p))) {
+    score = Math.max(score, 55);
+  }
+
   // ── Classify ───────────────────────────────────────────────────────────
   let classification: LeadClassification;
   if (score >= 80) {
